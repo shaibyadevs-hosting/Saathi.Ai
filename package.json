@@ -18,9 +18,10 @@
     "formidable": "^3.5.4",
     "lucide-react": "^0.561.0",
     "next": "16.0.10",
-    "pdf-parse": "^2.4.5",
+    "pdf-parse-new": "^2.0.0",
     "react": "19.2.1",
     "react-dom": "19.2.1",
+    "react-markdown": "^10.1.0",
     "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {

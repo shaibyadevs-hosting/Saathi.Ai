@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 // Initialize the Generative AI client
 const genAI = new GoogleGenerativeAI(
-  process.env.GOOGLE_GENERATIVE_AI_API_KEY || ""
+  process.env.GEMINI_API_KEY || ""
 );
 
 const SYSTEM_INSTRUCTION = `You are Saathi.ai, an expert Supreme Court legal assistant specializing in Indian law. 
@@ -53,11 +53,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Check for API key
-    if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+    if (!process.env.GEMINI_API_KEY) {
       return NextResponse.json(
         {
           error:
-            "Google Generative AI API key is not configured. Please add GOOGLE_GENERATIVE_AI_API_KEY to your .env.local file.",
+            "Google Generative AI API key is not configured. Please add GEMINI_API_KEY to your .env.local file.",
         },
         { status: 500 }
       );
@@ -115,7 +115,7 @@ ${message}
         return NextResponse.json(
           {
             error:
-              "Invalid API key. Please check your GOOGLE_GENERATIVE_AI_API_KEY.",
+              "Invalid API key. Please check your GEMINI_API_KEY.",
           },
           { status: 401 }
         );

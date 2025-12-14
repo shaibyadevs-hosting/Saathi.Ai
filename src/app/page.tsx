@@ -15,6 +15,10 @@ import {
   FileUp,
   X,
   Scale,
+  Mic,
+  Image,
+  FileType,
+  StopCircle,
 } from "lucide-react";
 
 interface Message {
@@ -24,6 +28,16 @@ interface Message {
   timestamp: Date;
 }
 
+interface UploadedFile {
+  name: string;
+  type: "document" | "image" | "audio";
+  size: number;
+}
+
+// File limits
+const MAX_DOC_FILES = 3;
+const MAX_IMAGE_FILES = 5;
+
 export default function HomePage() {
   // State management
   const [docText, setDocText] = useState<string>("");
@@ -32,12 +46,17 @@ export default function HomePage() {
   const [inputMessage, setInputMessage] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState<boolean>(false);
-  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const [uploadMode, setUploadMode] = useState<"files" | "audio">("files");
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
 
   // Refs
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -53,23 +72,95 @@ export default function HomePage() {
     setMessages([]);
     setInputMessage("");
     setError(null);
-    setUploadedFileName(null);
+    setUploadedFiles([]);
+    setUploadMode("files");
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
+    }
+    if (audioInputRef.current) {
+      audioInputRef.current.value = "";
     }
   };
 
   // Clear document only
   const handleClearDocument = () => {
     setDocText("");
-    setUploadedFileName(null);
+    setUploadedFiles([]);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
+    if (audioInputRef.current) {
+      audioInputRef.current.value = "";
+    }
   };
 
-  // Handle file upload
+  // Handle multiple file upload
   const handleFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    // Validate file counts
+    const docFiles: File[] = [];
+    const imageFiles: File[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const ext = file.name.toLowerCase().split(".").pop() || "";
+      
+      if (["pdf", "txt", "doc", "docx"].includes(ext)) {
+        docFiles.push(file);
+      } else if (["jpg", "jpeg", "png", "gif", "webp"].includes(ext)) {
+        imageFiles.push(file);
+      }
+    }
+
+    if (docFiles.length > MAX_DOC_FILES) {
+      setError(`Maximum ${MAX_DOC_FILES} document files allowed (PDF/Word/TXT)`);
+      return;
+    }
+
+    if (imageFiles.length > MAX_IMAGE_FILES) {
+      setError(`Maximum ${MAX_IMAGE_FILES} image files allowed`);
+      return;
+    }
+
+    setIsUploading(true);
+    setError(null);
+
+    try {
+      const formData = new FormData();
+      for (let i = 0; i < files.length; i++) {
+        formData.append("files", files[i]);
+      }
+
+      const response = await fetch("/api/parse-files", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to parse files");
+      }
+
+      setDocText(data.text);
+      setUploadedFiles(
+        data.files.map((f: { fileName: string; fileType: string; fileSize: number }) => ({
+          name: f.fileName,
+          type: f.fileType,
+          size: f.fileSize,
+        }))
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload files");
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // Handle audio file upload
+  const handleAudioUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
@@ -78,9 +169,9 @@ export default function HomePage() {
 
     try {
       const formData = new FormData();
-      formData.append("file", file);
+      formData.append("audio", file);
 
-      const response = await fetch("/api/parse-pdf", {
+      const response = await fetch("/api/transcribe-audio", {
         method: "POST",
         body: formData,
       });
@@ -88,15 +179,83 @@ export default function HomePage() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Failed to parse file");
+        throw new Error(data.error || "Failed to transcribe audio");
       }
 
       setDocText(data.text);
-      setUploadedFileName(data.fileName);
+      setUploadedFiles([{
+        name: data.fileName,
+        type: "audio",
+        size: data.fileSize,
+      }]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to upload file");
+      setError(err instanceof Error ? err.message : "Failed to transcribe audio");
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  // Start recording audio
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        stream.getTracks().forEach(track => track.stop());
+        
+        // Transcribe the recorded audio
+        setIsUploading(true);
+        try {
+          const formData = new FormData();
+          formData.append("audio", audioBlob, "recording.webm");
+
+          const response = await fetch("/api/transcribe-audio", {
+            method: "POST",
+            body: formData,
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || "Failed to transcribe audio");
+          }
+
+          setDocText(data.text);
+          setUploadedFiles([{
+            name: "Voice Recording",
+            type: "audio",
+            size: audioBlob.size,
+          }]);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Failed to transcribe recording");
+        } finally {
+          setIsUploading(false);
+        }
+      };
+
+      recorder.start();
+      setMediaRecorder(recorder);
+      setIsRecording(true);
+    } catch (err) {
+      setError("Could not access microphone. Please allow microphone access.");
+    }
+  };
+
+  // Stop recording
+  const stopRecording = () => {
+    if (mediaRecorder && isRecording) {
+      mediaRecorder.stop();
+      setIsRecording(false);
+      setMediaRecorder(null);
     }
   };
 
@@ -187,62 +346,150 @@ export default function HomePage() {
         <div className="w-full lg:w-[40%] bg-slate-900 border-r border-slate-700 flex flex-col">
           {/* Panel Header */}
           <div className="p-4 border-b border-slate-700">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <FileText className="w-5 h-5 text-blue-400" />
                 <h2 className="text-lg font-semibold text-white">
                   Case Context
                 </h2>
               </div>
-              <div className="flex items-center gap-2">
-                {/* File Upload Button */}
-                <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg cursor-pointer transition-colors text-sm">
-                  <Upload className="w-4 h-4" />
-                  <span className="hidden sm:inline">Upload</span>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".txt,.pdf"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                    disabled={isUploading}
-                  />
-                </label>
-                {/* Clear Button */}
-                <button
-                  onClick={handleClearDocument}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-red-900/50 text-slate-300 hover:text-red-400 rounded-lg transition-colors text-sm"
-                  disabled={!docText}
-                >
-                  <Trash2 className="w-4 h-4" />
-                  <span className="hidden sm:inline">Clear</span>
-                </button>
-              </div>
+              {/* Clear Button */}
+              <button
+                onClick={handleClearDocument}
+                className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-red-900/50 text-slate-300 hover:text-red-400 rounded-lg transition-colors text-sm"
+                disabled={!docText}
+              >
+                <Trash2 className="w-4 h-4" />
+                <span className="hidden sm:inline">Clear</span>
+              </button>
             </div>
 
-            {/* Upload Status */}
-            {uploadedFileName && (
-              <div className="mt-3 flex items-center gap-2 px-3 py-2 bg-blue-900/30 border border-blue-700/50 rounded-lg">
-                <FileUp className="w-4 h-4 text-blue-400" />
-                <span className="text-sm text-blue-300 truncate flex-1">
-                  {uploadedFileName}
-                </span>
-                <button
-                  onClick={() => {
-                    setUploadedFileName(null);
-                    if (fileInputRef.current) fileInputRef.current.value = "";
-                  }}
-                  className="text-blue-400 hover:text-blue-300"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+            {/* Upload Mode Toggle */}
+            <div className="flex gap-2 mb-3">
+              <button
+                onClick={() => setUploadMode("files")}
+                className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                  uploadMode === "files"
+                    ? "bg-blue-600 text-white"
+                    : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                }`}
+              >
+                <FileType className="w-4 h-4" />
+                <span>Files</span>
+              </button>
+              <button
+                onClick={() => setUploadMode("audio")}
+                className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                  uploadMode === "audio"
+                    ? "bg-blue-600 text-white"
+                    : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                }`}
+              >
+                <Mic className="w-4 h-4" />
+                <span>Audio</span>
+              </button>
+            </div>
+
+            {/* File Upload Section */}
+            {uploadMode === "files" && (
+              <div className="space-y-2">
+                <div className="flex gap-2">
+                  <label className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg cursor-pointer transition-colors text-sm border border-dashed border-slate-600">
+                    <Upload className="w-4 h-4" />
+                    <span>Upload Files</span>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".txt,.pdf,.doc,.docx,.jpg,.jpeg,.png,.gif,.webp"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                      disabled={isUploading}
+                      multiple
+                    />
+                  </label>
+                </div>
+                <p className="text-xs text-slate-500 text-center">
+                  Max: {MAX_DOC_FILES} docs (PDF/Word/TXT) or {MAX_IMAGE_FILES} images
+                </p>
+              </div>
+            )}
+
+            {/* Audio Upload Section */}
+            {uploadMode === "audio" && (
+              <div className="space-y-2">
+                <div className="flex gap-2">
+                  <label className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg cursor-pointer transition-colors text-sm border border-dashed border-slate-600">
+                    <Upload className="w-4 h-4" />
+                    <span>Upload Audio</span>
+                    <input
+                      ref={audioInputRef}
+                      type="file"
+                      accept=".mp3,.wav,.webm,.ogg,.m4a"
+                      onChange={handleAudioUpload}
+                      className="hidden"
+                      disabled={isUploading || isRecording}
+                    />
+                  </label>
+                  {!isRecording ? (
+                    <button
+                      onClick={startRecording}
+                      disabled={isUploading}
+                      className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm"
+                    >
+                      <Mic className="w-4 h-4" />
+                      <span>Record</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={stopRecording}
+                      className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm animate-pulse"
+                    >
+                      <StopCircle className="w-4 h-4" />
+                      <span>Stop</span>
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500 text-center">
+                  MP3, WAV, WEBM, OGG, M4A (max 25MB) or record directly
+                </p>
+              </div>
+            )}
+
+            {/* Uploaded Files List */}
+            {uploadedFiles.length > 0 && (
+              <div className="mt-3 space-y-2">
+                {uploadedFiles.map((file, index) => (
+                  <div
+                    key={index}
+                    className="flex items-center gap-2 px-3 py-2 bg-blue-900/30 border border-blue-700/50 rounded-lg"
+                  >
+                    {file.type === "document" && <FileUp className="w-4 h-4 text-blue-400" />}
+                    {file.type === "image" && <Image className="w-4 h-4 text-green-400" />}
+                    {file.type === "audio" && <Mic className="w-4 h-4 text-purple-400" />}
+                    <span className="text-sm text-blue-300 truncate flex-1">
+                      {file.name}
+                    </span>
+                    <span className="text-xs text-slate-500">
+                      {(file.size / 1024).toFixed(1)}KB
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
 
             {isUploading && (
               <div className="mt-3 flex items-center gap-2 text-blue-400">
                 <Loader2 className="w-4 h-4 animate-spin" />
-                <span className="text-sm">Parsing document...</span>
+                <span className="text-sm">
+                  {uploadMode === "audio" ? "Transcribing audio..." : "Parsing files..."}
+                </span>
+              </div>
+            )}
+
+            {isRecording && (
+              <div className="mt-3 flex items-center gap-2 text-red-400">
+                <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
+                <span className="text-sm">Recording... Click Stop when done</span>
               </div>
             )}
           </div>

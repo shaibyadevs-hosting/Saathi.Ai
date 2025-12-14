@@ -4,6 +4,7 @@ import {
   fiveLineSummaryPrompt,
   detailedSummaryPrompt,
   chronologyPrompt,
+  keyPointsPrompt,
 } from "@/lib/prompts";
 
 export async function POST(req: Request) {
@@ -21,6 +22,7 @@ export async function POST(req: Request) {
   if (type === "short") prompt = fiveLineSummaryPrompt(text);
   if (type === "detailed") prompt = detailedSummaryPrompt(text);
   if (type === "chronology") prompt = chronologyPrompt(text);
+  if (type === "keypoints") prompt = keyPointsPrompt(text);
 
   try {
     const result = await geminiModel.generateContent(prompt);

@@ -18,12 +18,28 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         <nav className='p-4 space-y-3 text-sm'>
           <a
+            href='/'
+            className={`block text-gray-700 ${
+              pathname === "/" ? "font-medium text-gray-800" : ""
+            }`}
+          >
+            Home
+          </a>
+          <a
             href='/dashboard'
             className={`block text-gray-700 ${
               pathname === "/dashboard" ? "font-medium text-gray-800" : ""
             }`}
           >
             Dashboard
+          </a>
+          <a
+            href='/upload'
+            className={`block text-gray-700 ${
+              pathname === "/upload" ? "font-medium text-gray-800" : ""
+            }`}
+          >
+            Upload & Summarize
           </a>
           <a
             href='/matters'

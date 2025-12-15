@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import pdfParse from "pdf-parse-new";
+import mammoth from "mammoth";
 
 // File limits
 const MAX_PDF_WORD_FILES = 3;
@@ -149,17 +150,25 @@ export async function POST(request: NextRequest) {
 
 // Helper function to extract text from Word documents
 async function extractWordText(buffer: Buffer, fileName: string): Promise<string> {
-  // Basic text extraction for .docx (which is a ZIP with XML)
-  // For full support, install and use 'mammoth' package
   try {
-    // Try to find readable text in the buffer
-    const text = buffer.toString("utf-8");
-    // Extract only printable characters
-    const readable = text.replace(/[^\x20-\x7E\n\r\t]/g, " ");
-    // Clean up excessive spaces
-    return readable.replace(/\s+/g, " ").trim();
-  } catch {
-    return `[Word document: ${fileName} - Install 'mammoth' package for full support]`;
+    if (fileName.endsWith(".docx")) {
+      // Use mammoth to extract text from .docx files
+      const result = await mammoth.extractRawText({ buffer });
+      return result.value || "";
+    } else if (fileName.endsWith(".doc")) {
+      // .doc files (older Word format) - mammoth doesn't support them fully
+      // Try basic extraction, but recommend converting to .docx
+      try {
+        const result = await mammoth.extractRawText({ buffer });
+        return result.value || `[Old Word format: ${fileName} - Please convert to .docx for better results]`;
+      } catch {
+        return `[Old Word format: ${fileName} - Please convert to .docx for better support]`;
+      }
+    }
+    return "";
+  } catch (error) {
+    console.error("Word extraction error:", error);
+    return `[Error extracting text from: ${fileName}]`;
   }
 }
 

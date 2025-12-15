@@ -25,13 +25,13 @@ export async function POST(request: NextRequest) {
       "audio/x-m4a",
     ];
 
-    const allowedExtensions = [".mp3", ".wav", ".webm", ".ogg", ".m4a", ".mp4"];
+    const allowedExtensions = [".mp3", ".wav", ".webm", ".ogg", ".m4a", ".mp4", ".mpeg", ".mpga"];
     const fileName = audioFile.name.toLowerCase();
     const ext = "." + fileName.split(".").pop();
 
     if (!allowedExtensions.includes(ext)) {
       return NextResponse.json(
-        { error: "Unsupported audio format. Please use MP3, WAV, WEBM, OGG, or M4A." },
+        { error: "Unsupported audio format. Please use MP3, WAV, WEBM, OGG, M4A, or MPEG." },
         { status: 400 }
       );
     }
@@ -126,6 +126,8 @@ function getMimeType(ext: string): string {
     ".ogg": "audio/ogg",
     ".m4a": "audio/mp4",
     ".mp4": "audio/mp4",
+    ".mpeg": "audio/mpeg",
+    ".mpga": "audio/mpeg",
   };
   return mimeTypes[ext] || "audio/mpeg";
 }

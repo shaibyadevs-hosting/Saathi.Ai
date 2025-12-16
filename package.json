@@ -20,10 +20,12 @@
     "mammoth": "^1.11.0",
     "next": "16.0.10",
     "pdf-parse-new": "^2.0.0",
+    "pdf-to-img": "^5.0.0",
     "react": "19.2.1",
     "react-dom": "19.2.1",
     "react-markdown": "^10.1.0",
-    "tailwind-merge": "^3.4.0"
+    "tailwind-merge": "^3.4.0",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.18",

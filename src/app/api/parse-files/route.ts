@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import pdfParse from "pdf-parse-new";
 import mammoth from "mammoth";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY as string);
 
 // File limits
 const MAX_PDF_WORD_FILES = 3;
@@ -13,6 +16,70 @@ interface ParsedFile {
   fileType: string;
   text: string;
   fileSize: number;
+  isScanned?: boolean;
+}
+
+// Helper function to perform OCR on a scanned PDF using Gemini Vision
+async function extractTextWithGeminiOCR(pdfBuffer: Buffer, fileName: string): Promise<string> {
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    
+    // Convert PDF buffer to base64
+    const base64Pdf = pdfBuffer.toString("base64");
+    
+    const result = await model.generateContent([
+      {
+        inlineData: {
+          mimeType: "application/pdf",
+          data: base64Pdf,
+        },
+      },
+      {
+        text: `This is a scanned PDF document. Please extract ALL the text content from this document accurately. 
+               Maintain the original structure and formatting as much as possible.
+               Include all headers, paragraphs, lists, and any other text content.
+               If there are tables, preserve their structure.
+               Only return the extracted text, nothing else.`,
+      },
+    ]);
+    
+    const response = await result.response;
+    return response.text();
+  } catch (error) {
+    console.error("Gemini OCR Error:", error);
+    throw new Error("Failed to perform OCR on scanned PDF");
+  }
+}
+
+// Helper function to perform OCR on images using Gemini Vision
+async function extractTextFromImage(imageBuffer: Buffer, mimeType: string): Promise<string> {
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    
+    const base64Image = imageBuffer.toString("base64");
+    
+    const result = await model.generateContent([
+      {
+        inlineData: {
+          mimeType: mimeType,
+          data: base64Image,
+        },
+      },
+      {
+        text: `Extract ALL text content from this image accurately. 
+               Maintain the original structure and formatting as much as possible.
+               Include all headers, paragraphs, lists, and any other text content.
+               If there are tables, preserve their structure.
+               Only return the extracted text, nothing else.`,
+      },
+    ]);
+    
+    const response = await result.response;
+    return response.text();
+  } catch (error) {
+    console.error("Image OCR Error:", error);
+    throw new Error("Failed to extract text from image");
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -66,13 +133,31 @@ export async function POST(request: NextRequest) {
     for (const file of docFiles) {
       const fileName = file.name.toLowerCase();
       let text = "";
+      let isScanned = false;
 
       if (fileName.endsWith(".txt")) {
         text = await file.text();
       } else if (fileName.endsWith(".pdf")) {
         const buffer = Buffer.from(await file.arrayBuffer());
-        const data = await pdfParse(buffer);
-        text = data.text;
+        
+        // First try to extract text directly
+        try {
+          const data = await pdfParse(buffer);
+          text = data.text;
+        } catch (parseError) {
+          console.log("PDF parse failed, will try OCR:", parseError);
+          text = "";
+        }
+        
+        // Check if the PDF is scanned (little to no extractable text)
+        const cleanedText = text.replace(/\s+/g, "").trim();
+        
+        if (!cleanedText || cleanedText.length < 50) {
+          // PDF appears to be scanned, use Gemini Vision OCR
+          console.log(`PDF "${file.name}" appears to be scanned, using Gemini Vision OCR...`);
+          isScanned = true;
+          text = await extractTextWithGeminiOCR(buffer, file.name);
+        }
       } else if (fileName.endsWith(".doc") || fileName.endsWith(".docx")) {
         // For Word files, we'll extract basic text
         // Note: Full Word parsing requires mammoth or similar library
@@ -93,25 +178,40 @@ export async function POST(request: NextRequest) {
           fileType: "document",
           text,
           fileSize: file.size,
+          isScanned,
         });
-        combinedTexts.push(`\n\n--- Document: ${file.name} ---\n\n${text}`);
+        combinedTexts.push(`\n\n--- Document: ${file.name}${isScanned ? " (Scanned)" : ""} ---\n\n${text}`);
       }
     }
 
-    // Process image files (will be sent to Gemini Vision API for OCR)
+    // Process image files using Gemini Vision API for OCR
     for (const file of imageFiles) {
-      const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
+      const buffer = Buffer.from(await file.arrayBuffer());
       const mimeType = getMimeType(file.name);
 
-      parsedFiles.push({
-        fileName: file.name,
-        fileType: "image",
-        text: "", // Text will be extracted via Vision API
-        fileSize: file.size,
-      });
+      try {
+        console.log(`Extracting text from image: ${file.name}`);
+        const text = await extractTextFromImage(buffer, mimeType);
+        
+        parsedFiles.push({
+          fileName: file.name,
+          fileType: "image",
+          text: text,
+          fileSize: file.size,
+        });
 
-      // Store image data for Vision API processing
-      combinedTexts.push(`\n\n--- Image: ${file.name} (Pending OCR) ---\n`);
+        if (text) {
+          combinedTexts.push(`\n\n--- Image: ${file.name} ---\n\n${text}`);
+        }
+      } catch (error) {
+        console.error(`Failed to extract text from image ${file.name}:`, error);
+        parsedFiles.push({
+          fileName: file.name,
+          fileType: "image",
+          text: "[Failed to extract text from image]",
+          fileSize: file.size,
+        });
+      }
     }
 
     const combinedText = combinedTexts.join("").trim();
